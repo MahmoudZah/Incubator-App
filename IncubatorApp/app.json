@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Incubator Monitor",
+    "slug": "incubator-monitor",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0B1426"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.incubator.monitor"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B1426"
+      },
+      "package": "com.incubator.monitor"
+    }
+  }
+}
