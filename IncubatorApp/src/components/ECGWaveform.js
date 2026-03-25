@@ -3,7 +3,7 @@ import { View, StyleSheet } from 'react-native';
 import Svg, { Polyline, Line, Rect } from 'react-native-svg';
 import { colors } from '../theme';
 
-export default function ECGWaveform({ data = [], width, height, color = '#34D399', showGrid = true }) {
+export default function ECGWaveform({ data = [], width, height, color = '#34D399', showGrid = true, bg = colors.surface, gridColor = colors.border }) {
   const points = useMemo(() => {
     if (data.length < 2) return '';
     const stepX = width / (data.length - 1);
@@ -34,9 +34,9 @@ export default function ECGWaveform({ data = [], width, height, color = '#34D399
   return (
     <View style={[styles.wrap, { width, height }]}>
       <Svg width={width} height={height}>
-        <Rect x={0} y={0} width={width} height={height} fill={colors.surface} rx={12} />
+        <Rect x={0} y={0} width={width} height={height} fill={bg} rx={12} />
         {gridLines.map((l) => (
-          <Line key={l.key} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={colors.border} strokeWidth={0.5} />
+          <Line key={l.key} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={gridColor} strokeWidth={0.5} />
         ))}
         {points ? (
           <Polyline points={points} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />

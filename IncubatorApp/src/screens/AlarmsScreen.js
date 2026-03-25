@@ -1,215 +1,171 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Switch, TouchableOpacity } from 'react-native';
+import React from 'react';
+import { View, Text, ScrollView, StyleSheet, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useIncubator } from '../context/IncubatorContext';
 import { colors, spacing, borderRadius, fontSize } from '../theme';
 
-function LimitControl({ label, value, unit, color, onDecrease, onIncrease }) {
+function AlarmItem({ title, desc, icon, active, type }) {
+  const isDanger = type === 'danger';
+  const color = isDanger ? colors.danger : colors.warning;
+  if (!active) return null;
   return (
-    <View style={styles.limitCtrl}>
-      <Text style={styles.limitLabel}>{label}</Text>
-      <View style={styles.limitRow}>
-        <TouchableOpacity style={styles.adjBtn} onPress={onDecrease}>
-          <Ionicons name="remove" size={20} color={colors.text} />
-        </TouchableOpacity>
-        <Text style={[styles.limitVal, { color }]}>
-          {value}
-          {unit}
-        </Text>
-        <TouchableOpacity style={styles.adjBtn} onPress={onIncrease}>
-          <Ionicons name="add" size={20} color={colors.text} />
-        </TouchableOpacity>
+    <View style={styles.card}>
+      <View style={[styles.stripe, { backgroundColor: color }]} />
+      <View style={[styles.iconWrap, { backgroundColor: color + '33' }]}>
+        <Ionicons name={icon} size={26} color={color} />
       </View>
-    </View>
-  );
-}
-
-function AlarmSetting({ icon, label, unit, minValue, maxValue, onChangeMin, onChangeMax, color, step, minBound, maxBound }) {
-  const adjust = (cur, delta, cb) => {
-    const n = Math.round((cur + delta) * 10) / 10;
-    if (n >= minBound && n <= maxBound) cb(n);
-  };
-  return (
-    <View style={styles.alarmCard}>
-      <View style={styles.alarmHead}>
-        <Ionicons name={icon} size={22} color={color} />
-        <Text style={styles.alarmLabel}>{label}</Text>
+      <View style={styles.textWrap}>
+        <Text style={styles.label}>{title}</Text>
+        <Text style={styles.desc}>{desc}</Text>
       </View>
-      <View style={styles.limitsRow}>
-        <LimitControl
-          label="MIN" value={minValue} unit={unit} color={color}
-          onDecrease={() => adjust(minValue, -step, onChangeMin)}
-          onIncrease={() => adjust(minValue, step, onChangeMin)}
-        />
-        <View style={styles.limitDiv} />
-        <LimitControl
-          label="MAX" value={maxValue} unit={unit} color={color}
-          onDecrease={() => adjust(maxValue, -step, onChangeMax)}
-          onIncrease={() => adjust(maxValue, step, onChangeMax)}
-        />
+      <View style={styles.arrowWrap}>
+        <Ionicons name="alert-circle" size={24} color={color} />
       </View>
     </View>
   );
 }
 
 export default function AlarmsScreen() {
-  const { state, updateAlarms, clearLog } = useIncubator();
-  const { alarms, alarmLog } = state;
-  const [tab, setTab] = useState('settings');
+  const { width: SCREEN_W, height: SCREEN_H } = useWindowDimensions();
+  const { state } = useIncubator();
+  const { connected, jaundiceDetected, sensorError } = state;
+
+  const hasAlarms = jaundiceDetected || sensorError || !connected;
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Alarms</Text>
-
-      {/* Tabs */}
-      <View style={styles.tabBar}>
-        {['settings', 'log'].map((t) => (
-          <TouchableOpacity key={t} style={[styles.tab, tab === t && styles.tabActive]} onPress={() => setTab(t)}>
-            <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-              {t === 'settings' ? 'Settings' : `Log${alarmLog.length ? ` (${alarmLog.length})` : ''}`}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {tab === 'settings' ? (
-        <View>
-          <AlarmSetting
-            icon="thermometer" label="Temperature" unit="°C"
-            minValue={alarms.tempMin} maxValue={alarms.tempMax}
-            onChangeMin={(v) => updateAlarms({ tempMin: v })}
-            onChangeMax={(v) => updateAlarms({ tempMax: v })}
-            color={colors.danger} step={0.5} minBound={30} maxBound={42}
-          />
-          <AlarmSetting
-            icon="water" label="Humidity" unit="%"
-            minValue={alarms.humMin} maxValue={alarms.humMax}
-            onChangeMin={(v) => updateAlarms({ humMin: v })}
-            onChangeMax={(v) => updateAlarms({ humMax: v })}
-            color={colors.primary} step={5} minBound={20} maxBound={90}
-          />
-          <AlarmSetting
-            icon="heart" label="Heart Rate" unit=" BPM"
-            minValue={alarms.bpmMin} maxValue={alarms.bpmMax}
-            onChangeMin={(v) => updateAlarms({ bpmMin: v })}
-            onChangeMax={(v) => updateAlarms({ bpmMax: v })}
-            color={colors.danger} step={5} minBound={60} maxBound={220}
-          />
-
-          <View style={styles.switchRow}>
-            <View style={styles.switchInfo}>
-              <Ionicons name="color-palette" size={22} color={colors.warning} />
-              <View style={{ marginLeft: spacing.md }}>
-                <Text style={styles.switchLabel}>Jaundice Alert</Text>
-                <Text style={styles.switchDesc}>Notify when jaundice is detected</Text>
-              </View>
-            </View>
-            <Switch
-              value={alarms.jaundiceAlertEnabled}
-              onValueChange={(v) => updateAlarms({ jaundiceAlertEnabled: v })}
-              trackColor={{ false: colors.border, true: colors.warning + '60' }}
-              thumbColor={alarms.jaundiceAlertEnabled ? colors.warning : colors.textMuted}
-            />
+    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
+      {/* Top Background / Tab list area */}
+      <View style={styles.topSection}>
+        <View style={styles.header}>
+          <View style={styles.titleRow}>
+             <Ionicons name="notifications-outline" size={32} color={colors.warning} style={styles.alertIcon} />
+             <Text style={styles.title}>System Alerts</Text>
           </View>
         </View>
-      ) : (
-        <View>
-          {alarmLog.length > 0 && (
-            <TouchableOpacity style={styles.clearBtn} onPress={clearLog}>
-              <Ionicons name="trash-outline" size={16} color={colors.danger} />
-              <Text style={styles.clearText}>Clear Log</Text>
-            </TouchableOpacity>
-          )}
-          {alarmLog.length === 0 ? (
-            <View style={styles.empty}>
-              <Ionicons name="checkmark-circle" size={48} color={colors.success} />
-              <Text style={styles.emptyTitle}>No alarms recorded</Text>
-              <Text style={styles.emptySub}>Alarm events will appear here</Text>
-            </View>
-          ) : (
-            alarmLog.map((e, i) => (
-              <View key={i} style={styles.logEntry}>
-                <View
-                  style={[styles.logIcon, {
-                    backgroundColor: e.type === 'danger' ? colors.dangerMuted : colors.warningMuted,
-                  }]}
-                >
-                  <Ionicons
-                    name={e.icon || 'alert-circle'}
-                    size={18}
-                    color={e.type === 'danger' ? colors.danger : colors.warning}
-                  />
-                </View>
-                <View style={styles.logInfo}>
-                  <Text style={styles.logMsg}>{e.message}</Text>
-                  <Text style={styles.logTime}>{e.time}</Text>
-                </View>
-              </View>
-            ))
-          )}
+
+        {/* Tab Bump imitating the calendar strips */}
+        <View style={styles.tabListRow}>
+          <View style={styles.activeTabWrap}>
+            <Ionicons name="notifications" size={24} color={colors.textDark} />
+            <Text style={styles.tabMonth}>ALERTS</Text>
+          </View>
+          <Text style={styles.deadTab}>LOGS</Text>
         </View>
-      )}
-      <View style={{ height: 30 }} />
+      </View>
+
+      {/* Main Container blending with Active Tab */}
+      <View style={[styles.mainCard, { minHeight: SCREEN_H - 150 }]}>
+        <View style={styles.listWrap}>
+          <AlarmItem
+            active={!connected}
+            title="Connection Lost"
+            desc="ESP32 incubator is disconnected"
+            icon="wifi"
+            type="danger"
+          />
+          <AlarmItem
+            active={sensorError}
+            title="Sensor Error"
+            desc="DHT22 or MAX30102 unreadable"
+            icon="warning"
+            type="danger"
+          />
+          <AlarmItem
+            active={jaundiceDetected}
+            title="Jaundice Detected"
+            desc="Skin color readings indicate jaundice risk"
+            icon="color-palette"
+            type="warning"
+          />
+        </View>
+
+        {!hasAlarms && (
+          <View style={styles.empty}>
+            <Ionicons name="checkmark-circle-outline" size={80} color={colors.success} />
+            <Text style={styles.emptyTitle}>All Systems Normal</Text>
+            <Text style={styles.emptySub}>No active alarms or warnings</Text>
+          </View>
+        )}
+      </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.lg, paddingTop: 60 },
-  title: { fontSize: fontSize.xxl, fontWeight: '800', color: colors.text, marginBottom: spacing.lg },
-  tabBar: {
-    flexDirection: 'row', backgroundColor: colors.surface, borderRadius: borderRadius.md,
-    padding: 4, marginBottom: spacing.lg,
+  scrollContent: { paddingTop: 60, paddingBottom: 0 },
+  topSection: { paddingHorizontal: spacing.lg },
+  
+  header: { 
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', 
   },
-  tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: borderRadius.sm },
-  tabActive: { backgroundColor: colors.primary },
-  tabText: { color: colors.textMuted, fontWeight: '600', fontSize: fontSize.md },
-  tabTextActive: { color: colors.text },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  alertIcon: {
+    textShadowColor: colors.warning,
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 10,
+  },
+  title: { fontSize: fontSize.xxl, fontWeight: '800', color: colors.textLight, letterSpacing: 0.5 },
+  
+  tabListRow: {
+    flexDirection: 'row', alignItems: 'flex-end', marginTop: spacing.xl,
+    gap: spacing.xl,
+  },
+  activeTabWrap: {
+    backgroundColor: colors.brand2,
+    borderTopLeftRadius: 40,
+    borderTopRightRadius: 40,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.lg,
+    alignItems: 'center',
+    marginBottom: -1, 
+    zIndex: 2,
+    shadowColor: colors.warning,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  tabMonth: { color: colors.textDark, fontSize: fontSize.xs, fontWeight: '800', marginTop: 4 },
+  deadTab: { color: colors.textLight, opacity: 0.6, fontSize: fontSize.lg, fontWeight: '800', marginBottom: spacing.xl },
 
-  alarmCard: {
-    backgroundColor: colors.surface, borderRadius: borderRadius.lg, padding: spacing.md,
-    borderWidth: 1, borderColor: colors.border, marginBottom: spacing.md,
+  mainCard: {
+    backgroundColor: colors.brand2,
+    borderTopRightRadius: 50,
+    borderTopLeftRadius: 0, 
+    paddingTop: spacing.xl,
+    paddingHorizontal: spacing.sm, 
   },
-  alarmHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.md },
-  alarmLabel: { color: colors.text, fontSize: fontSize.lg, fontWeight: '700' },
-  limitsRow: { flexDirection: 'row', alignItems: 'center' },
-  limitCtrl: { flex: 1, alignItems: 'center' },
-  limitLabel: { color: colors.textMuted, fontSize: fontSize.xs, fontWeight: '700', letterSpacing: 1, marginBottom: 6 },
-  limitRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  adjBtn: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: colors.surfaceElevated,
-    alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border,
-  },
-  limitVal: { fontSize: fontSize.xl, fontWeight: '800', minWidth: 70, textAlign: 'center' },
-  limitDiv: { width: 1, height: 40, backgroundColor: colors.border, marginHorizontal: spacing.sm },
 
-  switchRow: {
-    backgroundColor: colors.surface, borderRadius: borderRadius.lg, padding: spacing.md,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    borderWidth: 1, borderColor: colors.border, marginBottom: spacing.md,
+  listWrap: {
+    marginBottom: spacing.xxl,
   },
-  switchInfo: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  switchLabel: { color: colors.text, fontSize: fontSize.md, fontWeight: '600' },
-  switchDesc: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
 
-  clearBtn: {
-    flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', gap: 6,
-    marginBottom: spacing.md,
+  empty: { alignItems: 'center', paddingVertical: 100 },
+  emptyTitle: { color: colors.textDark, fontSize: fontSize.xl, fontWeight: '900', marginTop: spacing.md },
+  emptySub: { color: colors.textMutedDark, fontSize: fontSize.sm, marginTop: 4, fontWeight: '700' },
+
+  /* List Item styling matching VitalCard */
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.whiteTranslucent,
+    marginHorizontal: spacing.sm,
   },
-  clearText: { color: colors.danger, fontSize: fontSize.sm, fontWeight: '600' },
-
-  empty: { alignItems: 'center', paddingVertical: 60 },
-  emptyTitle: { color: colors.text, fontSize: fontSize.lg, fontWeight: '700', marginTop: spacing.md },
-  emptySub: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 4 },
-
-  logEntry: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface,
-    borderRadius: borderRadius.md, padding: spacing.md, marginBottom: spacing.sm,
-    borderWidth: 1, borderColor: colors.border,
+  stripe: {
+    position: 'absolute', left: 0, top: spacing.lg, bottom: spacing.lg, width: 6, borderRadius: 3,
   },
-  logIcon: { width: 40, height: 40, borderRadius: borderRadius.md, alignItems: 'center', justifyContent: 'center' },
-  logInfo: { marginLeft: spacing.md, flex: 1 },
-  logMsg: { color: colors.text, fontSize: fontSize.md, fontWeight: '600' },
-  logTime: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
+  iconWrap: {
+    width: 50, height: 50, borderRadius: 25,
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 10, marginRight: spacing.md,
+  },
+  textWrap: { flex: 1, justifyContent: 'center' },
+  label: { color: colors.textDark, fontSize: fontSize.md, fontWeight: '800', marginBottom: 2 },
+  desc: { color: colors.textMutedDark, fontSize: fontSize.xs, fontWeight: '700' },
+  arrowWrap: { alignItems: 'center', justifyContent: 'center' },
 });

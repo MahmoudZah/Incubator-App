@@ -1,20 +1,45 @@
 export const colors = {
-  background: '#0B1426',
-  surface: '#111D35',
-  surfaceElevated: '#162040',
-  primary: '#4A9EFF',
-  primaryMuted: 'rgba(74, 158, 255, 0.15)',
-  secondary: '#06B6D4',
-  success: '#34D399',
-  successMuted: 'rgba(52, 211, 153, 0.15)',
-  warning: '#FBBF24',
-  warningMuted: 'rgba(251, 191, 36, 0.15)',
-  danger: '#F87171',
-  dangerMuted: 'rgba(248, 113, 113, 0.15)',
-  text: '#F1F5F9',
-  textSecondary: '#8B9DC3',
-  textMuted: '#4A5F85',
-  border: '#1E3055',
+  // App Base (Navy Blue Vibe)
+  background: '#0F172A', // Navy Blue app background
+  surface: '#1E293B',
+  surfaceElevated: '#334155',
+
+  // Soft Neonatal Palette (Variant Cards)
+  brand1: '#EAF4FF', // APP / Dashboard
+  brand2: '#FFF1E6', // ALERTS / Alarms
+  brand3: '#FFE5E3', // LIVE / ECG
+  brand4: '#FDECEC', // DATA / History
+  brand5: '#EDE7F6', // SETTINGS / App
+  
+  // Accents
+  primary: '#4DA6FF', // Baby blue
+  secondary: '#6EDCC4', // Mint green
+  
+  // Status
+  success: '#6EDCC4', // Mint green for success
+  warning: '#FFD580', // Light yellow 
+  danger: '#FF8A80',  // Soft coral
+
+  // Text Colors
+  textDark: '#2E2E2E',       // Soft dark gray, the primary text color
+  textLight: '#FFFFFF',      // White text for navy background
+  textMutedDark: '#888888',
+  textMutedLight: '#888888',
+  
+  // Text mapping for backward compatibility
+  text: '#2E2E2E',
+  textSecondary: '#888888',
+  textMuted: '#AAAAAA',
+
+  // Utility
+  whiteTranslucent: 'rgba(255, 255, 255, 0.4)',
+  whiteTranslucentStrong: 'rgba(255, 255, 255, 0.7)',
+  darkTranslucent: 'rgba(0, 0, 0, 0.05)',
+  transparent: 'transparent',
+  border: 'rgba(0,0,0,0.05)',
+  
+  glowBlue: 'rgba(77,166,255,0.25)',
+  glowMint: 'rgba(110,220,196,0.25)',
 };
 
 export const spacing = {
@@ -30,6 +55,7 @@ export const borderRadius = {
   md: 12,
   lg: 16,
   xl: 24,
+  card: 40,
   full: 999,
 };
 

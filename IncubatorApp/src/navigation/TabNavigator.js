@@ -25,15 +25,25 @@ export default function TabNavigator() {
         headerShown: false,
         tabBarStyle: {
           backgroundColor: colors.surface,
-          borderTopColor: colors.border,
-          borderTopWidth: 1,
-          height: 64,
-          paddingBottom: 10,
-          paddingTop: 8,
+          borderTopWidth: 0,
+          height: 70,
+          paddingBottom: 15,
+          paddingTop: 10,
+          // Floating dock styles
+          position: 'absolute',
+          bottom: 20,
+          left: 20,
+          right: 20,
+          borderRadius: 35,
+          elevation: 10,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 10 },
+          shadowOpacity: 0.25,
+          shadowRadius: 10,
         },
         tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textMuted,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+        tabBarInactiveTintColor: colors.textMutedLight,
+        tabBarShowLabel: false, // Cleaner look similar to style picture
       }}
     >
       {TABS.map((t) => (

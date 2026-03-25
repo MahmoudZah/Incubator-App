@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, borderRadius, spacing, fontSize } from '../theme';
+import { colors, spacing, fontSize } from '../theme';
 
 const statusColors = {
   normal: colors.success,
@@ -10,78 +10,91 @@ const statusColors = {
   inactive: colors.textMuted,
 };
 
-const statusBgs = {
-  normal: colors.successMuted,
-  warning: colors.warningMuted,
-  danger: colors.dangerMuted,
-  inactive: colors.primaryMuted,
-};
-
 export default function VitalCard({ icon, label, value, unit, status = 'inactive', color }) {
-  const sColor = color || statusColors[status] || colors.textSecondary;
-  const bgColor = statusBgs[status] || colors.primaryMuted;
+  const sColor = color || (statusColors[status] || colors.textDark);
 
   return (
-    <View style={[styles.card, { borderColor: sColor + '25' }]}>
-      <View style={[styles.iconWrap, { backgroundColor: bgColor }]}>
-        <Ionicons name={icon} size={22} color={sColor} />
+    <View style={styles.card}>
+      {/* Left colored stripe like the trail list */}
+      <View style={[styles.stripe, { backgroundColor: sColor }]} />
+      
+      {/* Icon */}
+      <View style={styles.iconWrap}>
+        <Ionicons name={icon} size={26} color={colors.textDark} />
       </View>
-      <Text style={styles.label}>{label}</Text>
-      <View style={styles.valueRow}>
-        <Text style={[styles.value, { color: sColor }]}>{value}</Text>
-        {unit ? <Text style={styles.unit}>{unit}</Text> : null}
+
+      {/* Text Content */}
+      <View style={styles.textWrap}>
+        <Text style={styles.label}>{label}</Text>
+        <Text style={styles.valueWrap}>
+          <Text style={styles.value}>{value}</Text>
+          {unit ? <Text style={styles.unit}>{unit}</Text> : null}
+        </Text>
       </View>
-      <View style={[styles.dot, { backgroundColor: sColor }]} />
+
+      {/* Trailing Icon (Arrow like the image) */}
+      <View style={styles.arrowWrap}>
+        <Ionicons name="chevron-forward" size={24} color={colors.textMutedDark} />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: colors.surface,
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    flex: 1,
-    borderWidth: 1,
-    borderColor: colors.border,
-    minHeight: 130,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.whiteTranslucent,
+    marginHorizontal: spacing.sm,
+  },
+  stripe: {
+    position: 'absolute',
+    left: 0,
+    top: spacing.lg,
+    bottom: spacing.lg,
+    width: 6,
+    borderRadius: 3,
   },
   iconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: borderRadius.md,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: colors.whiteTranslucent,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.sm,
+    marginLeft: 10,
+    marginRight: spacing.md,
+  },
+  textWrap: {
+    flex: 1,
+    justifyContent: 'center',
   },
   label: {
-    color: colors.textSecondary,
-    fontSize: fontSize.xs,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: spacing.xs,
+    color: colors.textDark,
+    fontSize: fontSize.md,
+    fontWeight: '800',
+    marginBottom: 2,
   },
-  valueRow: {
+  valueWrap: {
     flexDirection: 'row',
     alignItems: 'baseline',
   },
   value: {
-    fontSize: fontSize.xxl,
-    fontWeight: '800',
+    color: colors.textMutedDark,
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    marginRight: 4,
   },
   unit: {
-    color: colors.textSecondary,
-    fontSize: fontSize.sm,
+    color: colors.textMutedDark,
+    fontSize: fontSize.xs,
     fontWeight: '600',
-    marginLeft: 4,
   },
-  dot: {
-    position: 'absolute',
-    top: spacing.md,
-    right: spacing.md,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  arrowWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
