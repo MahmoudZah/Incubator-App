@@ -19,7 +19,7 @@ export default function DashboardScreen({ navigation }) {
   const { state, connect, disconnect } = useIncubator();
   const {
     connected, temperature, humidity, heartRate,
-    jaundiceDetected, lampOn, heaterOn, fanOn,
+    jaundiceDetected, lampOn, heaterOn, fanOn, humidifierOn,
     ecgData, patient, sensorError, alarms,
   } = state;
 
@@ -79,6 +79,7 @@ export default function DashboardScreen({ navigation }) {
           <StatusChip icon="flame" active={heaterOn} color={colors.danger} />
           <StatusChip icon="snow" active={fanOn} color={colors.primary} />
           <StatusChip icon="sunny" active={lampOn} color={colors.warning} />
+          <StatusChip icon="water" active={humidifierOn} color={'#64B5F6'} />
         </View>
 
         {/* Column List matching the "Trail List" exactly */}

@@ -29,7 +29,7 @@ function InputField({ icon, label, value, onChangeText, placeholder, multiline, 
 
 export default function SettingsScreen() {
   const { width: SCREEN_W, height: SCREEN_H } = useWindowDimensions();
-  const { state, connect, disconnect, updatePatient, sendCalibration } = useIncubator();
+  const { state, connect, disconnect, updatePatient, updateAlarms, sendCalibration } = useIncubator();
   const [ipInput, setIpInput] = useState(state.ipAddress);
   const [name, setName] = useState(state.patient.name);
   const [birth, setBirth] = useState(state.patient.birthDate);
@@ -37,10 +37,30 @@ export default function SettingsScreen() {
   const [doctor, setDoctor] = useState(state.patient.doctor);
   const [notes, setNotes] = useState(state.patient.notes);
 
+  // Alarm limits local state
+  const [tempMin, setTempMin] = useState(String(state.alarms.tempMin));
+  const [tempMax, setTempMax] = useState(String(state.alarms.tempMax));
+  const [humMin, setHumMin] = useState(String(state.alarms.humMin));
+  const [humMax, setHumMax] = useState(String(state.alarms.humMax));
+  const [bpmMin, setBpmMin] = useState(String(state.alarms.bpmMin));
+  const [bpmMax, setBpmMax] = useState(String(state.alarms.bpmMax));
+
   const handleConnect = () => (state.connected ? disconnect() : connect(ipInput));
   const handleSave = () => {
     updatePatient({ name, birthDate: birth, gestationalAge: gestAge, doctor, notes });
     Alert.alert('Saved', 'Patient information updated');
+  };
+  const handleSaveAlarms = () => {
+    const newAlarms = {
+      tempMin: parseFloat(tempMin) || 35.5,
+      tempMax: parseFloat(tempMax) || 37.5,
+      humMin: parseFloat(humMin) || 40,
+      humMax: parseFloat(humMax) || 70,
+      bpmMin: parseFloat(bpmMin) || 100,
+      bpmMax: parseFloat(bpmMax) || 180,
+    };
+    updateAlarms(newAlarms);
+    Alert.alert('Saved', 'Alarm limits updated and sent to ESP32');
   };
   const handleCalibrate = () => {
     Alert.alert(
@@ -104,6 +124,47 @@ export default function SettingsScreen() {
           
           <TouchableOpacity style={styles.submitBtn} onPress={handleSave}>
             <Text style={styles.submitBtnText}>Save Patient Info</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Alarm Limits */}
+        <Text style={styles.sectionHeader}>Alarm Limits</Text>
+        <View style={styles.listGroup}>
+          <View style={styles.limitRow}>
+            <View style={[styles.limitStripe, { backgroundColor: colors.danger }]} />
+            <View style={styles.limitIconWrap}>
+              <Ionicons name="thermometer" size={20} color={colors.danger} />
+            </View>
+            <Text style={styles.limitLabel}>Temp</Text>
+            <TextInput style={styles.limitInput} value={tempMin} onChangeText={setTempMin} keyboardType="numeric" placeholder="Min" placeholderTextColor={colors.textMutedDark} />
+            <Text style={styles.limitDash}>–</Text>
+            <TextInput style={styles.limitInput} value={tempMax} onChangeText={setTempMax} keyboardType="numeric" placeholder="Max" placeholderTextColor={colors.textMutedDark} />
+            <Text style={styles.limitUnit}>°C</Text>
+          </View>
+          <View style={styles.limitRow}>
+            <View style={[styles.limitStripe, { backgroundColor: colors.primary }]} />
+            <View style={styles.limitIconWrap}>
+              <Ionicons name="water" size={20} color={colors.primary} />
+            </View>
+            <Text style={styles.limitLabel}>Hum</Text>
+            <TextInput style={styles.limitInput} value={humMin} onChangeText={setHumMin} keyboardType="numeric" placeholder="Min" placeholderTextColor={colors.textMutedDark} />
+            <Text style={styles.limitDash}>–</Text>
+            <TextInput style={styles.limitInput} value={humMax} onChangeText={setHumMax} keyboardType="numeric" placeholder="Max" placeholderTextColor={colors.textMutedDark} />
+            <Text style={styles.limitUnit}>%</Text>
+          </View>
+          <View style={styles.limitRow}>
+            <View style={[styles.limitStripe, { backgroundColor: colors.success }]} />
+            <View style={styles.limitIconWrap}>
+              <Ionicons name="heart" size={20} color={colors.success} />
+            </View>
+            <Text style={styles.limitLabel}>BPM</Text>
+            <TextInput style={styles.limitInput} value={bpmMin} onChangeText={setBpmMin} keyboardType="numeric" placeholder="Min" placeholderTextColor={colors.textMutedDark} />
+            <Text style={styles.limitDash}>–</Text>
+            <TextInput style={styles.limitInput} value={bpmMax} onChangeText={setBpmMax} keyboardType="numeric" placeholder="Max" placeholderTextColor={colors.textMutedDark} />
+            <Text style={styles.limitUnit}>BPM</Text>
+          </View>
+          <TouchableOpacity style={[styles.submitBtn, { backgroundColor: colors.primary }]} onPress={handleSaveAlarms}>
+            <Text style={styles.submitBtnText}>Save Alarm Limits</Text>
           </TouchableOpacity>
         </View>
 
@@ -223,5 +284,41 @@ const styles = StyleSheet.create({
   },
   submitBtnText: {
     color: '#FFF', fontWeight: '800', fontSize: fontSize.md, letterSpacing: 0.5,
+  },
+
+  /* Alarm Limit Row */
+  limitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.whiteTranslucent,
+    marginHorizontal: spacing.sm,
+  },
+  limitStripe: {
+    position: 'absolute', left: 0, top: spacing.sm, bottom: spacing.sm, width: 5, borderRadius: 3,
+  },
+  limitIconWrap: {
+    width: 36, height: 36, borderRadius: 18, backgroundColor: colors.whiteTranslucent,
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 8, marginRight: spacing.sm,
+  },
+  limitLabel: {
+    color: colors.textDark, fontSize: fontSize.sm, fontWeight: '800', width: 44,
+  },
+  limitInput: {
+    flex: 1, backgroundColor: colors.whiteTranslucentStrong,
+    borderRadius: 14, paddingVertical: 8, paddingHorizontal: 12,
+    color: colors.textDark, fontSize: fontSize.md, fontWeight: '900',
+    textAlign: 'center',
+  },
+  limitDash: {
+    color: colors.textMutedDark, fontSize: fontSize.lg, fontWeight: '800',
+    marginHorizontal: 6,
+  },
+  limitUnit: {
+    color: colors.textMutedDark, fontSize: fontSize.xs, fontWeight: '800',
+    width: 30, textAlign: 'right',
   },
 });

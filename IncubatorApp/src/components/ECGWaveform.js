@@ -6,11 +6,24 @@ import { colors } from '../theme';
 export default function ECGWaveform({ data = [], width, height, color = '#34D399', showGrid = true, bg = colors.surface, gridColor = colors.border }) {
   const points = useMemo(() => {
     if (data.length < 2) return '';
-    const stepX = width / (data.length - 1);
-    const minVal = Math.min(...data);
-    const maxVal = Math.max(...data);
-    const range = maxVal - minVal || 1;
-    return data
+    
+    // Downsample if we have more points than pixels (width)
+    let renderData = data;
+    if (data.length > width) {
+      const step = data.length / width;
+      renderData = [];
+      for (let i = 0; i < width; i++) {
+        renderData.push(data[Math.floor(i * step)]);
+      }
+    }
+
+    const stepX = width / (renderData.length - 1);
+    // Use fixed range for 12-bit ADC (0 to 4095) so shape doesn't distort
+    const minVal = 0;
+    const maxVal = 4095;
+    const range = maxVal - minVal;
+    
+    return renderData
       .map((val, i) => {
         const x = i * stepX;
         const y = height - ((val - minVal) / range) * (height * 0.8) - height * 0.1;

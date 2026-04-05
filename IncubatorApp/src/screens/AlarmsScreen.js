@@ -28,9 +28,12 @@ function AlarmItem({ title, desc, icon, active, type }) {
 export default function AlarmsScreen() {
   const { width: SCREEN_W, height: SCREEN_H } = useWindowDimensions();
   const { state } = useIncubator();
-  const { connected, jaundiceDetected, sensorError } = state;
+  const { connected, jaundiceDetected, sensorError, activeAlarms, temperature, humidity, heartRate, alarms } = state;
 
-  const hasAlarms = jaundiceDetected || sensorError || !connected;
+  const hasAlarms = jaundiceDetected || sensorError || !connected
+    || activeAlarms.tempLow || activeAlarms.tempHigh
+    || activeAlarms.humLow || activeAlarms.humHigh
+    || activeAlarms.bpmLow || activeAlarms.bpmHigh;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
@@ -66,7 +69,7 @@ export default function AlarmsScreen() {
           <AlarmItem
             active={sensorError}
             title="Sensor Error"
-            desc="DHT22 or MAX30102 unreadable"
+            desc="DHT11 or AD8232 unreadable"
             icon="warning"
             type="danger"
           />
@@ -76,6 +79,48 @@ export default function AlarmsScreen() {
             desc="Skin color readings indicate jaundice risk"
             icon="color-palette"
             type="warning"
+          />
+          <AlarmItem
+            active={activeAlarms.tempLow}
+            title="Low Temperature"
+            desc={`Temperature ${temperature.toFixed(1)}°C is below ${alarms.tempMin}°C`}
+            icon="thermometer"
+            type="danger"
+          />
+          <AlarmItem
+            active={activeAlarms.tempHigh}
+            title="High Temperature"
+            desc={`Temperature ${temperature.toFixed(1)}°C is above ${alarms.tempMax}°C`}
+            icon="thermometer"
+            type="danger"
+          />
+          <AlarmItem
+            active={activeAlarms.humLow}
+            title="Low Humidity"
+            desc={`Humidity ${humidity.toFixed(0)}% is below ${alarms.humMin}%`}
+            icon="water"
+            type="warning"
+          />
+          <AlarmItem
+            active={activeAlarms.humHigh}
+            title="High Humidity"
+            desc={`Humidity ${humidity.toFixed(0)}% is above ${alarms.humMax}%`}
+            icon="water"
+            type="warning"
+          />
+          <AlarmItem
+            active={activeAlarms.bpmLow}
+            title="Low Heart Rate"
+            desc={`Heart rate ${heartRate} BPM is below ${alarms.bpmMin} BPM`}
+            icon="heart"
+            type="danger"
+          />
+          <AlarmItem
+            active={activeAlarms.bpmHigh}
+            title="High Heart Rate"
+            desc={`Heart rate ${heartRate} BPM is above ${alarms.bpmMax} BPM`}
+            icon="heart"
+            type="danger"
           />
         </View>
 

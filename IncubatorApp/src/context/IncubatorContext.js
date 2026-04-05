@@ -1,16 +1,17 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import wsService from '../services/websocket';
+import { Audio } from 'expo-av';
 
 const IncubatorContext = createContext();
 
-const MAX_ECG_POINTS = 300;
+const MAX_ECG_POINTS = 600;
 const MAX_HISTORY_POINTS = 360;
 const MAX_LOG_ENTRIES = 100;
 
 const initialState = {
   connected: false,
-  ipAddress: '192.168.1.100',
+  ipAddress: '192.168.4.1',
 
   temperature: 0,
   humidity: 0,
@@ -20,6 +21,7 @@ const initialState = {
   lampOn: false,
   heaterOn: false,
   fanOn: false,
+  humidifierOn: false,
   sensorError: false,
 
   ecgData: [],
@@ -62,9 +64,6 @@ function reducer(state, action) {
 
     case 'UPDATE_VITALS': {
       const d = action.payload;
-      const newEcg = [...state.ecgData, d.ecg ?? 512];
-      if (newEcg.length > MAX_ECG_POINTS) newEcg.shift();
-
       return {
         ...state,
         temperature: d.temp ?? state.temperature,
@@ -75,14 +74,26 @@ function reducer(state, action) {
         lampOn: d.lamp ?? state.lampOn,
         heaterOn: d.heater ?? state.heaterOn,
         fanOn: d.fan ?? state.fanOn,
+        humidifierOn: d.humidifier ?? state.humidifierOn,
         sensorError: d.sensorError ?? false,
-        ecgData: newEcg,
         treatmentStartTime:
           d.jaundice && !state.jaundiceDetected
             ? Date.now()
             : d.jaundice
               ? state.treatmentStartTime
               : null,
+      };
+    }
+
+    case 'UPDATE_ECG': {
+      const { samples, bpm } = action.payload;
+      const newEcg = [...state.ecgData, ...samples];
+      // Trim from the front if over capacity
+      while (newEcg.length > MAX_ECG_POINTS) newEcg.shift();
+      return {
+        ...state,
+        ecgData: newEcg,
+        heartRate: bpm ?? state.heartRate,
       };
     }
 
@@ -132,6 +143,33 @@ export function IncubatorProvider({ children }) {
   const historyInterval = useRef(null);
   const lastVitals = useRef({});
   const alarmsRef = useRef(state.alarms);
+  const soundRef = useRef(null);
+  const isPlayingRef = useRef(false);
+
+  // Initialize and load the audio
+  useEffect(() => {
+    (async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          shouldDuckAndroid: true,
+        });
+        const { sound } = await Audio.Sound.createAsync(
+          require('../../assets/sounds/alarm.wav'),
+          { isLooping: true }
+        );
+        soundRef.current = sound;
+      } catch (e) {
+        console.log('Error loading audio:', e);
+      }
+    })();
+    return () => {
+      if (soundRef.current) {
+        soundRef.current.unloadAsync();
+      }
+    };
+  }, []);
 
   useEffect(() => { alarmsRef.current = state.alarms; }, [state.alarms]);
 
@@ -204,6 +242,46 @@ export function IncubatorProvider({ children }) {
     }
   }, []);
 
+  // Effect to manage alarm audio playback
+  useEffect(() => {
+    const hasCriticalAlarms =
+      state.jaundiceDetected ||
+      state.sensorError ||
+      (!state.connected && state.ipAddress) /* Only alarm if connection was lost, though might need logic depending on exact specs */ ||
+      state.activeAlarms.tempLow ||
+      state.activeAlarms.tempHigh ||
+      state.activeAlarms.humLow ||
+      state.activeAlarms.humHigh ||
+      state.activeAlarms.bpmLow ||
+      state.activeAlarms.bpmHigh;
+
+    // Remove the `!state.connected` from triggering loops if it's annoying, but user requested alarms for below/above normal, hum and jaundice.
+    const shouldAlarm =
+      state.jaundiceDetected ||
+      state.activeAlarms.tempLow ||
+      state.activeAlarms.tempHigh ||
+      state.activeAlarms.humLow ||
+      state.activeAlarms.humHigh;
+
+    if (shouldAlarm && !isPlayingRef.current) {
+      if (soundRef.current) {
+        soundRef.current.playAsync();
+        isPlayingRef.current = true;
+      }
+    } else if (!shouldAlarm && isPlayingRef.current) {
+      if (soundRef.current) {
+        soundRef.current.stopAsync();
+        isPlayingRef.current = false;
+      }
+    }
+  }, [
+    state.jaundiceDetected,
+    state.activeAlarms.tempLow,
+    state.activeAlarms.tempHigh,
+    state.activeAlarms.humLow,
+    state.activeAlarms.humHigh,
+  ]);
+
   const connect = useCallback(
     (ip) => {
       if (ip) dispatch({ type: 'SET_IP', payload: ip });
@@ -217,9 +295,20 @@ export function IncubatorProvider({ children }) {
         dispatch({ type: 'SET_CONNECTED', payload: false });
       };
       wsService.onMessage = (data) => {
-        lastVitals.current = data;
-        dispatch({ type: 'UPDATE_VITALS', payload: data });
-        checkAlarms(data);
+        // Route by message type: "ecg" for fast ECG batches, "vitals" for slow sensors
+        if (data.type === 'ecg') {
+          dispatch({ type: 'UPDATE_ECG', payload: { samples: data.ecg || [], bpm: data.bpm } });
+        } else {
+          // vitals message (or legacy single-value message for backward compat)
+          lastVitals.current = data;
+          dispatch({ type: 'UPDATE_VITALS', payload: data });
+          checkAlarms(data);
+
+          // Backward compat: if there's a single ecg value (legacy firmware), push it
+          if (data.ecg !== undefined && !data.type) {
+            dispatch({ type: 'UPDATE_ECG', payload: { samples: [data.ecg], bpm: data.bpm } });
+          }
+        }
       };
 
       wsService.connect(targetIp);
