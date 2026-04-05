@@ -3,12 +3,7 @@
   ─────────────────────────────────────────────────────────
   Sensors : DHT11 (temp/humidity), TCS3200 (color/jaundice), AD8232 (ECG)
   Outputs : Relay (heater/fan), Lamp (phototherapy)
-  Comms   : WiFi → WebSocket server on port 81
-
-  Libraries needed (install via Arduino Library Manager):
-    - DHT sensor library  (by Adafruit)
-    - ArduinoJson         (by Benoît Blanchon)
-    - WebSockets          (by Markus Sattler / Links2004)
+  Comms   : WiFi AP mode → WebSocket server on port 81
 */
 
 #include <WiFi.h>
@@ -17,60 +12,107 @@
 #include <Preferences.h>
 #include <DHT.h>
 
-// ── WiFi credentials (CHANGE THESE) ──────────────────
-const char* ssid     = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+// ── WiFi AP credentials ──────────────────────────────
+const char* ap_ssid     = "Incubator_AP";
+const char* ap_password = "incubator123";
 
-// ── Pin Definitions ──────────────────────────────────
-#define DHTPIN      4
-#define DHTTYPE     DHT11
-#define RELAY_PIN   26
+// ── Objects ──────────────────────────────────────────
+WebSocketsServer webSocket(81);
+Preferences prefs;
 
+// =========================
+// ECG PINS & FILTERS
+// =========================
+const int ecgPin = 34;
+const int loMinus = 14;
+const int loPlus = 13;
+
+float rawValue = 0;
+float lpfValue = 0;
+float hpfValue = 0;
+float notchValue = 0;
+
+float xn1 = 0, xn2 = 0, yn1 = 0, yn2 = 0;
+const float a0 = 0.945, a1 = -1.529, a2 = 0.945;
+const float b1 = -1.529, b2 = 0.890;
+
+const float alphaLPF = 0.4;
+const float alphaHPF = 0.96;
+
+float prevRawValue = 0;
+float prevHPFValue = 0;
+
+unsigned long previousMicros = 0;
+const long interval = 4000; // 250Hz
+
+// ── ECG fast-sample buffer
+#define ECG_BATCH_SIZE   30        // sufficient for 100ms at 250Hz = 25 samples
+int     ecgBuffer[ECG_BATCH_SIZE];
+int     ecgBufIdx = 0;
+
+unsigned long lastEcgSend = 0;
+const int ECG_SEND_INTERVAL = 100;  // send batch every 100ms
+
+// ── BPM calculation
+unsigned long lastBeat   = 0;
+int           currentBPM = 0;
+float         ecgPrev    = 0;
+const int     ECG_THRESH = 2800; 
+
+// =========================
+// TEMP SYSTEM
+// =========================
+#define DHTPIN 4
+#define DHTTYPE DHT11
+
+#define HEATER_RELAY 25
+#define FAN_RELAY 26
+
+DHT dht(DHTPIN, DHTTYPE);
+
+// =========================
+// JAUNDICE / COLOR SENSOR
+// =========================
 #define S0 18
 #define S1 19
 #define S2 21
 #define S3 22
 #define sensorOut 23
-const int sensorLED = 5;
-const int lamp      = 27;
 
-#define ECG_PIN     34
-#define ECG_LO_PLUS  32
-#define ECG_LO_MINUS 33
+#define sensorLED 5
+#define BLUE_RELAY 32
 
-// ── Objects ──────────────────────────────────────────
-DHT dht(DHTPIN, DHTTYPE);
-WebSocketsServer webSocket(81);
-Preferences prefs;
-
-// ── Color calibration values ─────────────────────────
 int redMin, redMax;
 int greenMin, greenMax;
 int blueMin, blueMax;
 
-// ── State ────────────────────────────────────────────
-bool jaundiceDetected   = false;
+bool jaundiceDetected = false;
 bool calibrationPending = false;
 
-// ── Alarm limits (updated from the app) ──────────────
-float tempMinLimit = 35.5;
-float tempMaxLimit = 37.5;
+// ── App Limits ───────────────────────────────────────
+float tempMinLimit = 35.5; 
+float tempMaxLimit = 37.5; 
 float humMinLimit  = 40;
 float humMaxLimit  = 70;
 
-// ── BPM calculation ──────────────────────────────────
-unsigned long lastBeat   = 0;
-int           currentBPM = 0;
-int           ecgPrev    = 0;
-const int     ECG_THRESH = 2800;
+// ── TIMING ───────────────────────────────────────────
+unsigned long lastTempRead = 0;
+const unsigned long tempInterval = 2000;
 
-// ── Timing ───────────────────────────────────────────
-unsigned long lastSend  = 0;
-const int     SEND_INTERVAL = 100;   // ms between WebSocket broadcasts
+unsigned long lastColorRead = 0;
+const unsigned long colorInterval = 2000;
 
-// ═══════════════════════════════════════════════════════
-//  Color sensor helpers
-// ═══════════════════════════════════════════════════════
+// ── Cached values ────────────────────────────────────
+float cachedTemp    = 0;
+float cachedHum     = 0;
+bool  cachedSensorError = false;
+bool  cachedHeaterOn    = false;
+bool  cachedFanOn       = false;
+int   cachedR = 0, cachedG = 0, cachedB = 0;
+
+// =========================
+// COLOR SENSOR FUNCTIONS
+// =========================
 int rawRead(int s2, int s3) {
   digitalWrite(S2, s2);
   digitalWrite(S3, s3);
@@ -82,12 +124,11 @@ int getMappedColor(int s2, int s3, int minV, int maxV) {
   return constrain(map(freq, minV, maxV, 255, 0), 0, 255);
 }
 
-// ═══════════════════════════════════════════════════════
-//  Calibration
-// ═══════════════════════════════════════════════════════
+// =========================
+// CALIBRATION
+// =========================
 void runCalibration() {
   Serial.println("\n--- CALIBRATION ---");
-
   Serial.println("1. WHITE surface — reading in 5 s...");
   delay(5000);
   redMin   = rawRead(LOW, LOW);
@@ -111,33 +152,13 @@ void runCalibration() {
   calibrationPending = false;
 }
 
-void loadCalibration() {
-  redMin   = prefs.getInt("rMin", 0);
-  greenMin = prefs.getInt("gMin", 0);
-  blueMin  = prefs.getInt("bMin", 0);
-  redMax   = prefs.getInt("rMax", 255);
-  greenMax = prefs.getInt("gMax", 255);
-  blueMax  = prefs.getInt("bMax", 255);
-
-  if (redMin == 0 && greenMin == 0 && blueMin == 0)
-    Serial.println("WARNING: No calibration data — readings may be inaccurate.");
-  else
-    Serial.println("Calibration loaded.");
-}
-
 // ═══════════════════════════════════════════════════════
-//  WebSocket event handler
+// WebSocket event handler
 // ═══════════════════════════════════════════════════════
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
-    case WStype_CONNECTED:
-      Serial.printf("[WS] Client #%u connected\n", num);
-      break;
-
-    case WStype_DISCONNECTED:
-      Serial.printf("[WS] Client #%u disconnected\n", num);
-      break;
-
+    case WStype_CONNECTED:     Serial.printf("[WS] Client #%u connected\n", num); break;
+    case WStype_DISCONNECTED:  Serial.printf("[WS] Client #%u disconnected\n", num); break;
     case WStype_TEXT: {
       StaticJsonDocument<256> doc;
       if (deserializeJson(doc, payload) != DeserializationError::Ok) break;
@@ -150,70 +171,69 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
         if (doc.containsKey("tempMax")) tempMaxLimit = doc["tempMax"];
         if (doc.containsKey("humMin"))  humMinLimit  = doc["humMin"];
         if (doc.containsKey("humMax"))  humMaxLimit  = doc["humMax"];
-        Serial.printf("Limits updated → T: %.1f–%.1f  H: %.0f–%.0f\n",
-                       tempMinLimit, tempMaxLimit, humMinLimit, humMaxLimit);
       }
       else if (strcmp(cmd, "calibrate") == 0) {
         calibrationPending = true;
-        Serial.println("Calibration requested from app");
       }
       break;
     }
-
     default: break;
   }
 }
 
-// ═══════════════════════════════════════════════════════
-//  SETUP
-// ═══════════════════════════════════════════════════════
+// =========================
+// SETUP
+// =========================
 void setup() {
   Serial.begin(115200);
 
-  // ── DHT + relay ────────────────────────────────────
-  dht.begin();
-  pinMode(RELAY_PIN, OUTPUT);
+  // ===== ECG SETUP =====
+  pinMode(loMinus, INPUT);
+  pinMode(loPlus, INPUT);
 
-  // ── Color sensor ───────────────────────────────────
-  pinMode(S0, OUTPUT);  pinMode(S1, OUTPUT);
-  pinMode(S2, OUTPUT);  pinMode(S3, OUTPUT);
+  // ===== TEMP SETUP =====
+  dht.begin();
+  pinMode(HEATER_RELAY, OUTPUT);
+  pinMode(FAN_RELAY, OUTPUT);
+  
+  digitalWrite(HEATER_RELAY, HIGH); 
+  digitalWrite(FAN_RELAY, HIGH);    
+
+  // ===== JAUNDICE SETUP =====
+  pinMode(S0, OUTPUT);
+  pinMode(S1, OUTPUT);
+  pinMode(S2, OUTPUT);
+  pinMode(S3, OUTPUT);
   pinMode(sensorOut, INPUT);
   pinMode(sensorLED, OUTPUT);
-  pinMode(lamp, OUTPUT);
+  pinMode(BLUE_RELAY, OUTPUT);
 
-  digitalWrite(sensorLED, HIGH);
-  digitalWrite(S0, HIGH);
+  digitalWrite(sensorLED, HIGH);   
+  digitalWrite(S0, HIGH);          
   digitalWrite(S1, LOW);
-  digitalWrite(lamp, LOW);
+  digitalWrite(BLUE_RELAY, LOW);   
 
-  // ── ECG ────────────────────────────────────────────
-  pinMode(ECG_LO_PLUS, INPUT);
-  pinMode(ECG_LO_MINUS, INPUT);
-
-  // ── Load calibration ──────────────────────────────
+  // Load stored calibration
   prefs.begin("color_cal", false);
-  loadCalibration();
+  redMin   = prefs.getInt("rMin", 0);
+  greenMin = prefs.getInt("gMin", 0);
+  blueMin  = prefs.getInt("bMin", 0);
+  redMax   = prefs.getInt("rMax", 255);
+  greenMax = prefs.getInt("gMax", 255);
+  blueMax  = prefs.getInt("bMax", 255);
 
-  // ── WiFi ───────────────────────────────────────────
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ap_ssid, ap_password);
+  delay(100);
+  Serial.print("\nAP IP: "); Serial.println(WiFi.softAPIP());
 
-  // ── WebSocket ──────────────────────────────────────
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
-  Serial.println("WebSocket server started on port 81");
 }
 
-// ═══════════════════════════════════════════════════════
-//  LOOP
-// ═══════════════════════════════════════════════════════
+// =========================
+// LOOP
+// =========================
 void loop() {
   webSocket.loop();
 
@@ -222,103 +242,161 @@ void loop() {
     return;
   }
 
-  // ── Read sensors ───────────────────────────────────
-  float temp = dht.readTemperature();
-  float hum  = dht.readHumidity();
-  bool sensorError = isnan(temp) || isnan(hum);
+  unsigned long currentMillis = millis();
+  unsigned long currentMicros = micros();
 
-  // ── Temperature control ────────────────────────────
-  bool heaterOn = false;
-  bool fanOn    = false;
+  // =========================
+  // ECG LOOP (250Hz)
+  // =========================
+  if (currentMicros - previousMicros >= interval) {
+    previousMicros = currentMicros;
 
-  if (!sensorError) {
-    if (temp < tempMinLimit) {
-      digitalWrite(RELAY_PIN, HIGH); delay(200);
-      digitalWrite(RELAY_PIN, LOW);  delay(200);
-      heaterOn = true;
-    } else if (temp > tempMaxLimit) {
-      digitalWrite(RELAY_PIN, LOW);
-      fanOn = true;
-    } else {
-      digitalWrite(RELAY_PIN, LOW);
-      fanOn = true;
-    }
-  }
-
-  // ── Color / jaundice ──────────────────────────────
-  if (!jaundiceDetected) {
-    int r = getMappedColor(LOW, LOW,   redMin,   redMax);
-    int g = getMappedColor(HIGH, HIGH, greenMin, greenMax);
-    int b = getMappedColor(LOW, HIGH,  blueMin,  blueMax);
-
-    if (r > 180 && g > 150 && b < 120) {
-      jaundiceDetected = true;
-      digitalWrite(lamp, HIGH);
-      Serial.println("*** JAUNDICE DETECTED ***");
-    }
-
-    // ── ECG ────────────────────────────────────────
-    int ecgRaw = analogRead(ECG_PIN);
-    bool leadsOff = digitalRead(ECG_LO_PLUS) || digitalRead(ECG_LO_MINUS);
-
-    if (!leadsOff && ecgRaw > ECG_THRESH && ecgPrev <= ECG_THRESH) {
-      unsigned long now = millis();
-      if (lastBeat > 0) {
-        unsigned long interval = now - lastBeat;
-        if (interval > 300 && interval < 2000)
-          currentBPM = 60000 / interval;
+    if (digitalRead(loPlus) == HIGH || digitalRead(loMinus) == HIGH) {
+      xn1 = xn2 = yn1 = yn2 = 0;
+      prevRawValue = prevHPFValue = 0;
+      lpfValue = 0;
+      
+      if (ecgBufIdx < ECG_BATCH_SIZE) {
+        ecgBuffer[ecgBufIdx++] = 2048; // Centered flatline
       }
-      lastBeat = now;
-    }
-    ecgPrev = ecgRaw;
+      ecgPrev = 0;
+    } else {
+      rawValue = analogRead(ecgPin);
 
-    // ── Broadcast via WebSocket ────────────────────
-    if (millis() - lastSend >= SEND_INTERVAL) {
-      lastSend = millis();
+      // Notch filter (50Hz)
+      notchValue = a0 * rawValue + a1 * xn1 + a2 * xn2 - b1 * yn1 - b2 * yn2;
+      xn2 = xn1; xn1 = rawValue;
+      yn2 = yn1; yn1 = notchValue;
 
-      StaticJsonDocument<300> doc;
-      doc["temp"]        = sensorError ? 0 : temp;
-      doc["hum"]         = sensorError ? 0 : hum;
-      doc["ecg"]         = leadsOff ? 512 : ecgRaw;
-      doc["bpm"]         = leadsOff ? 0   : currentBPM;
-      doc["jaundice"]    = jaundiceDetected;
-      doc["lamp"]        = (bool)digitalRead(lamp);
-      doc["heater"]      = heaterOn;
-      doc["fan"]         = fanOn;
-      doc["sensorError"] = sensorError;
+      // Low-pass filter
+      lpfValue = lpfValue + alphaLPF * (notchValue - lpfValue);
 
-      JsonObject rgb = doc.createNestedObject("rgb");
-      rgb["r"] = r;
-      rgb["g"] = g;
-      rgb["b"] = b;
+      // High-pass filter
+      hpfValue = alphaHPF * (prevHPFValue + lpfValue - prevRawValue);
+      prevRawValue = lpfValue;
+      prevHPFValue = hpfValue;
 
-      String output;
-      serializeJson(doc, output);
-      webSocket.broadcastTXT(output);
-    }
-  } else {
-    digitalWrite(lamp, HIGH);
+      // Adjusted to center on 2048 for the 0-4095 app graph scale
+      int filteredOut = (hpfValue * 2) + 2048; 
+      if (ecgBufIdx < ECG_BATCH_SIZE) {
+        ecgBuffer[ecgBufIdx++] = filteredOut;
+      }
 
-    // Still send status while treating
-    if (millis() - lastSend >= SEND_INTERVAL) {
-      lastSend = millis();
-
-      StaticJsonDocument<200> doc;
-      doc["temp"]        = sensorError ? 0 : temp;
-      doc["hum"]         = sensorError ? 0 : hum;
-      doc["ecg"]         = 512;
-      doc["bpm"]         = currentBPM;
-      doc["jaundice"]    = true;
-      doc["lamp"]        = true;
-      doc["heater"]      = heaterOn;
-      doc["fan"]         = fanOn;
-      doc["sensorError"] = sensorError;
-
-      String output;
-      serializeJson(doc, output);
-      webSocket.broadcastTXT(output);
+      // Peak detection for BPM based on raw signal
+      if (rawValue > ECG_THRESH && ecgPrev <= ECG_THRESH) {
+        if (lastBeat > 0) {
+          unsigned long beatInterval = currentMillis - lastBeat;
+          if (beatInterval > 300 && beatInterval < 2000) {
+            currentBPM = 60000 / beatInterval;
+          }
+        }
+        lastBeat = currentMillis;
+      }
+      ecgPrev = rawValue;
     }
   }
 
-  delay(10);
+  // ── Send ECG batch (every 100ms)
+  if (currentMillis - lastEcgSend >= ECG_SEND_INTERVAL) {
+    lastEcgSend = currentMillis;
+
+    if (ecgBufIdx > 0) {
+      StaticJsonDocument<512> ecgDoc;
+      ecgDoc["type"] = "ecg";
+      JsonArray ecgArr = ecgDoc.createNestedArray("ecg");
+      for (int i = 0; i < ecgBufIdx; i++) {
+        ecgArr.add(ecgBuffer[i]);
+      }
+      ecgDoc["bpm"] = currentBPM;
+
+      String ecgOut;
+      serializeJson(ecgDoc, ecgOut);
+      webSocket.broadcastTXT(ecgOut);
+      ecgBufIdx = 0;
+    }
+  }
+
+  // =========================
+  // TEMP AND HUMIDITY LOOP
+  // =========================
+  if (currentMillis - lastTempRead >= tempInterval) {
+    lastTempRead = currentMillis;
+
+    float temp = dht.readTemperature();
+    float hum  = dht.readHumidity();
+
+    if (isnan(temp) || isnan(hum)) {
+      cachedSensorError = true;
+      cachedTemp = 0; cachedHum = 0;
+      digitalWrite(HEATER_RELAY, HIGH); // OFF
+      digitalWrite(FAN_RELAY, LOW);     // ON
+      cachedHeaterOn = false;
+      cachedFanOn = true;
+    } else {
+      cachedSensorError = false;
+      cachedTemp = temp;
+      cachedHum = hum;
+
+      if (temp < tempMinLimit) {
+        digitalWrite(HEATER_RELAY, LOW);  // ON
+        digitalWrite(FAN_RELAY, LOW);     // ON
+        cachedHeaterOn = true; 
+        cachedFanOn = true;
+      } else if (temp > tempMaxLimit) {
+        digitalWrite(HEATER_RELAY, HIGH); // OFF
+        digitalWrite(FAN_RELAY, LOW);     // ON
+        cachedHeaterOn = false; 
+        cachedFanOn = true;
+      } else {
+        digitalWrite(HEATER_RELAY, HIGH); // OFF
+        digitalWrite(FAN_RELAY, LOW);     // ON (Default to circulating)
+        cachedHeaterOn = false; 
+        cachedFanOn = true;
+      }
+    }
+  }
+
+  // =========================
+  // JAUNDICE LOOP
+  // =========================
+  if (currentMillis - lastColorRead >= colorInterval) {
+    lastColorRead = currentMillis;
+
+    cachedR = getMappedColor(LOW,  LOW,  redMin,   redMax);
+    cachedG = getMappedColor(HIGH, HIGH, greenMin, greenMax);
+    cachedB = getMappedColor(LOW,  HIGH, blueMin,  blueMax);
+
+    if (cachedR > 180 && cachedG > 150 && cachedB < 120) {
+      if (!jaundiceDetected) {
+        Serial.println("*** JAUNDICE DETECTED ***");
+        jaundiceDetected = true;
+      }
+      digitalWrite(BLUE_RELAY, HIGH);  // ON
+    } else {
+      jaundiceDetected = false;
+      digitalWrite(BLUE_RELAY, LOW);   // OFF
+    }
+
+    // Broadcast full array
+    StaticJsonDocument<400> doc;
+    doc["type"]        = "vitals";
+    doc["temp"]        = cachedTemp;
+    doc["hum"]         = cachedHum;
+    doc["bpm"]         = currentBPM;
+    doc["jaundice"]    = jaundiceDetected;
+    doc["lamp"]        = (bool)digitalRead(BLUE_RELAY);
+    doc["heater"]      = cachedHeaterOn;
+    doc["fan"]         = cachedFanOn;
+    doc["humidifier"]  = false; // removed in hardware
+    doc["sensorError"] = cachedSensorError;
+
+    if (!jaundiceDetected) {
+      JsonObject rgb = doc.createNestedObject("rgb");
+      rgb["r"] = cachedR; rgb["g"] = cachedG; rgb["b"] = cachedB;
+    }
+
+    String output;
+    serializeJson(doc, output);
+    webSocket.broadcastTXT(output);
+  }
 }
