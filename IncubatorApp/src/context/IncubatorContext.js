@@ -52,6 +52,8 @@ const initialState = {
   },
 
   treatmentStartTime: null,
+  tempAlarmSilenced: false,
+  humAlarmSilenced: false,
 };
 
 function reducer(state, action) {
@@ -70,18 +72,24 @@ function reducer(state, action) {
         humidity: d.hum ?? state.humidity,
         heartRate: d.bpm ?? state.heartRate,
         rgb: d.rgb ?? state.rgb,
-        jaundiceDetected: d.jaundice ?? state.jaundiceDetected,
+        jaundiceDetected: state.jaundiceDetected || !!d.jaundice,
         lampOn: d.lamp ?? state.lampOn,
         heaterOn: d.heater ?? state.heaterOn,
         fanOn: d.fan ?? state.fanOn,
         humidifierOn: d.humidifier ?? state.humidifierOn,
         sensorError: d.sensorError ?? false,
         treatmentStartTime:
-          d.jaundice && !state.jaundiceDetected
-            ? Date.now()
-            : d.jaundice
-              ? state.treatmentStartTime
-              : null,
+          (d.jaundice || state.jaundiceDetected) 
+            ? (state.treatmentStartTime || Date.now())
+            : null,
+        tempAlarmSilenced: 
+          (d.temp < state.alarms.tempMin || d.temp > state.alarms.tempMax)
+            ? state.tempAlarmSilenced
+            : false,
+        humAlarmSilenced:
+          (d.hum < state.alarms.humMin || d.hum > state.alarms.humMax)
+            ? state.humAlarmSilenced
+            : false,
       };
     }
 
@@ -122,7 +130,13 @@ function reducer(state, action) {
       return { ...state, activeAlarms: { ...state.activeAlarms, [action.payload.key]: action.payload.active } };
 
     case 'SET_ALARMS':
-      return { ...state, alarms: { ...state.alarms, ...action.payload } };
+      return {
+        ...state,
+        alarms: { ...state.alarms, ...action.payload },
+        // Re-arm silenced alarms so new thresholds can trigger immediately
+        tempAlarmSilenced: false,
+        humAlarmSilenced: false,
+      };
 
     case 'SET_PATIENT':
       return { ...state, patient: { ...state.patient, ...action.payload } };
@@ -132,6 +146,15 @@ function reducer(state, action) {
 
     case 'LOAD_SETTINGS':
       return { ...state, ...action.payload };
+
+    case 'CLEAR_JAUNDICE':
+      return { ...state, jaundiceDetected: false, treatmentStartTime: null };
+
+    case 'SILENCE_TEMP_ALARM':
+      return { ...state, tempAlarmSilenced: true };
+
+    case 'SILENCE_HUM_ALARM':
+      return { ...state, humAlarmSilenced: true };
 
     default:
       return state;
@@ -144,6 +167,7 @@ export function IncubatorProvider({ children }) {
   const lastVitals = useRef({});
   const alarmsRef = useRef(state.alarms);
   const soundRef = useRef(null);
+  const [isAudioReady, setIsAudioReady] = React.useState(false);
   const isPlayingRef = useRef(false);
 
   // Initialize and load the audio
@@ -160,6 +184,7 @@ export function IncubatorProvider({ children }) {
           { isLooping: true }
         );
         soundRef.current = sound;
+        setIsAudioReady(true);
       } catch (e) {
         console.log('Error loading audio:', e);
       }
@@ -171,7 +196,14 @@ export function IncubatorProvider({ children }) {
     };
   }, []);
 
-  useEffect(() => { alarmsRef.current = state.alarms; }, [state.alarms]);
+  // Keep alarmsRef up-to-date AND immediately re-check alarms when thresholds change
+  useEffect(() => {
+    alarmsRef.current = state.alarms;
+    // Re-evaluate current vitals against the new thresholds immediately
+    if (lastVitals.current && lastVitals.current.temp !== undefined) {
+      checkAlarms(lastVitals.current);
+    }
+  }, [state.alarms, checkAlarms]);
 
   useEffect(() => {
     (async () => {
@@ -201,6 +233,8 @@ export function IncubatorProvider({ children }) {
     }, 500);
     return () => clearTimeout(t);
   }, [state.alarms, state.patient, state.ipAddress]);
+
+  // (alarmsRef is kept up-to-date and alarms are re-checked in the effect above)
 
   const checkAlarms = useCallback((data) => {
     const a = alarmsRef.current;
@@ -244,42 +278,40 @@ export function IncubatorProvider({ children }) {
 
   // Effect to manage alarm audio playback
   useEffect(() => {
-    const hasCriticalAlarms =
-      state.jaundiceDetected ||
-      state.sensorError ||
-      (!state.connected && state.ipAddress) /* Only alarm if connection was lost, though might need logic depending on exact specs */ ||
-      state.activeAlarms.tempLow ||
-      state.activeAlarms.tempHigh ||
-      state.activeAlarms.humLow ||
-      state.activeAlarms.humHigh ||
-      state.activeAlarms.bpmLow ||
-      state.activeAlarms.bpmHigh;
-
-    // Remove the `!state.connected` from triggering loops if it's annoying, but user requested alarms for below/above normal, hum and jaundice.
+    const isTempAlarmActive = state.activeAlarms.tempLow || state.activeAlarms.tempHigh;
+    const isHumAlarmActive = state.activeAlarms.humLow || state.activeAlarms.humHigh;
+    const isBpmAlarmActive = state.activeAlarms.bpmLow || state.activeAlarms.bpmHigh;
+    
     const shouldAlarm =
       state.jaundiceDetected ||
-      state.activeAlarms.tempLow ||
-      state.activeAlarms.tempHigh ||
-      state.activeAlarms.humLow ||
-      state.activeAlarms.humHigh;
+      (isTempAlarmActive && !state.tempAlarmSilenced) ||
+      (isHumAlarmActive && !state.humAlarmSilenced) ||
+      isBpmAlarmActive;
 
     if (shouldAlarm && !isPlayingRef.current) {
-      if (soundRef.current) {
-        soundRef.current.playAsync();
-        isPlayingRef.current = true;
+      if (soundRef.current && isAudioReady) {
+        soundRef.current.playAsync().then(() => {
+          isPlayingRef.current = true;
+        }).catch(e => console.log('Playback error:', e));
       }
     } else if (!shouldAlarm && isPlayingRef.current) {
-      if (soundRef.current) {
-        soundRef.current.stopAsync();
-        isPlayingRef.current = false;
+      if (soundRef.current && isAudioReady) {
+        soundRef.current.stopAsync().then(() => {
+          isPlayingRef.current = false;
+        }).catch(e => console.log('Stop error:', e));
       }
     }
   }, [
+    isAudioReady,
+    state.tempAlarmSilenced,
+    state.humAlarmSilenced,
     state.jaundiceDetected,
     state.activeAlarms.tempLow,
     state.activeAlarms.tempHigh,
     state.activeAlarms.humLow,
     state.activeAlarms.humHigh,
+    state.activeAlarms.bpmLow,
+    state.activeAlarms.bpmHigh,
   ]);
 
   const connect = useCallback(
@@ -351,10 +383,16 @@ export function IncubatorProvider({ children }) {
   const updatePatient = useCallback((info) => dispatch({ type: 'SET_PATIENT', payload: info }), []);
   const clearLog = useCallback(() => dispatch({ type: 'CLEAR_LOG' }), []);
   const sendCalibration = useCallback(() => wsService.send({ cmd: 'calibrate' }), []);
+  const clearJaundice = useCallback(() => {
+    wsService.send({ cmd: 'clearJaundice' });
+    dispatch({ type: 'CLEAR_JAUNDICE' });
+  }, []);
+  const silenceTempAlarm = useCallback(() => dispatch({ type: 'SILENCE_TEMP_ALARM' }), []);
+  const silenceHumAlarm = useCallback(() => dispatch({ type: 'SILENCE_HUM_ALARM' }), []);
 
   return (
     <IncubatorContext.Provider
-      value={{ state, connect, disconnect, updateAlarms, updatePatient, clearLog, sendCalibration }}
+      value={{ state, connect, disconnect, updateAlarms, updatePatient, clearLog, sendCalibration, clearJaundice, silenceTempAlarm, silenceHumAlarm }}
     >
       {children}
     </IncubatorContext.Provider>

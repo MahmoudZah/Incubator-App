@@ -51,7 +51,7 @@ int     ecgBuffer[ECG_BATCH_SIZE];
 int     ecgBufIdx = 0;
 
 unsigned long lastEcgSend = 0;
-const int ECG_SEND_INTERVAL = 100;  // send batch every 100ms
+const int ECG_SEND_INTERVAL = 100;
 
 // ── BPM calculation
 unsigned long lastBeat   = 0;
@@ -60,7 +60,7 @@ float         ecgPrev    = 0;
 const int     ECG_THRESH = 2800; 
 
 // =========================
-// TEMP SYSTEM
+// TEMP / HUMIDITY
 // =========================
 #define DHTPIN 4
 #define DHTTYPE DHT11
@@ -71,7 +71,7 @@ const int     ECG_THRESH = 2800;
 DHT dht(DHTPIN, DHTTYPE);
 
 // =========================
-// JAUNDICE / COLOR SENSOR
+// COLOR SENSOR (TCS3200)
 // =========================
 #define S0 18
 #define S1 19
@@ -88,19 +88,24 @@ int blueMin, blueMax;
 
 bool jaundiceDetected = false;
 bool calibrationPending = false;
+bool colorCalValid = false;
+
+unsigned long rawR = 0;
+unsigned long rawG = 0;
+unsigned long rawB = 0;
 
 // ── App Limits ───────────────────────────────────────
 float tempMinLimit = 35.5; 
 float tempMaxLimit = 37.5; 
-float humMinLimit  = 40;
-float humMaxLimit  = 70;
+float humMinLimit  = 40.0;
+float humMaxLimit  = 70.0;
 
 // ── TIMING ───────────────────────────────────────────
 unsigned long lastTempRead = 0;
 const unsigned long tempInterval = 2000;
 
 unsigned long lastColorRead = 0;
-const unsigned long colorInterval = 2000;
+const unsigned long colorInterval = 300; 
 
 // ── Cached values ────────────────────────────────────
 float cachedTemp    = 0;
@@ -111,35 +116,78 @@ bool  cachedFanOn       = false;
 int   cachedR = 0, cachedG = 0, cachedB = 0;
 
 // =========================
-// COLOR SENSOR FUNCTIONS
+// COLOR SENSOR HELPERS
 // =========================
-int rawRead(int s2, int s3) {
+unsigned long rawReadAveraged(uint8_t s2, uint8_t s3) {
   digitalWrite(S2, s2);
   digitalWrite(S3, s3);
-  return pulseIn(sensorOut, LOW);
+  delayMicroseconds(300);
+
+  const int samples = 5;
+  unsigned long sum = 0;
+  int validCount = 0;
+
+  for (int i = 0; i < samples; i++) {
+    unsigned long val = pulseIn(sensorOut, LOW, 30000);
+    if (val > 0) {
+      sum += val;
+      validCount++;
+    }
+    delayMicroseconds(200);
+  }
+  return (validCount == 0) ? 0 : (sum / validCount);
 }
 
-int getMappedColor(int s2, int s3, int minV, int maxV) {
-  int freq = rawRead(s2, s3);
-  return constrain(map(freq, minV, maxV, 255, 0), 0, 255);
+int mapColorSafe(unsigned long freq, int calWhite, int calBlack) {
+  if (freq == 0) return 0;
+  if (calWhite == calBlack) return constrain((int)map(freq, 20, 400, 255, 0), 0, 255);
+  long out;
+  if (calWhite < calBlack) out = map((long)freq, calWhite, calBlack, 255, 0);
+  else out = map((long)freq, calBlack, calWhite, 0, 255);
+  return constrain((int)out, 0, 255);
+}
+
+bool calibrationLooksValid() {
+  if (redMin == 0 && greenMin == 0 && blueMin == 0 && redMax == 255 && greenMax == 255 && blueMax == 255) return false;
+  if (redMin == redMax || greenMin == greenMax || blueMin == blueMax) return false;
+  return true;
+}
+
+void readRGB() {
+  rawR = rawReadAveraged(LOW, LOW);   // Red
+  rawG = rawReadAveraged(HIGH, HIGH); // Green
+  rawB = rawReadAveraged(LOW, HIGH);  // Blue
+
+  if (colorCalValid) {
+    cachedR = mapColorSafe(rawR, redMin, redMax);
+    cachedG = mapColorSafe(rawG, greenMin, greenMax);
+    cachedB = mapColorSafe(rawB, blueMin, blueMax);
+  } else {
+    cachedR = constrain((int)map((long)rawR, 20, 400, 255, 0), 0, 255);
+    cachedG = constrain((int)map((long)rawG, 20, 400, 255, 0), 0, 255);
+    cachedB = constrain((int)map((long)rawB, 20, 400, 255, 0), 0, 255);
+  }
 }
 
 // =========================
 // CALIBRATION
 // =========================
 void runCalibration() {
-  Serial.println("\n--- CALIBRATION ---");
-  Serial.println("1. WHITE surface — reading in 5 s...");
+  Serial.println("\n--- COLOR SENSOR CALIBRATION ---");
+  Serial.println("Place WHITE surface. Reading in 5 s...");
   delay(5000);
-  redMin   = rawRead(LOW, LOW);
-  greenMin = rawRead(HIGH, HIGH);
-  blueMin  = rawRead(LOW, HIGH);
+  unsigned long rWhite = rawReadAveraged(LOW, LOW);
+  unsigned long gWhite = rawReadAveraged(HIGH, HIGH);
+  unsigned long bWhite = rawReadAveraged(LOW, HIGH);
 
-  Serial.println("2. BLACK surface — reading in 5 s...");
+  Serial.println("Place BLACK surface. Reading in 5 s...");
   delay(5000);
-  redMax   = rawRead(LOW, LOW);
-  greenMax = rawRead(HIGH, HIGH);
-  blueMax  = rawRead(LOW, HIGH);
+  unsigned long rBlack = rawReadAveraged(LOW, LOW);
+  unsigned long gBlack = rawReadAveraged(HIGH, HIGH);
+  unsigned long bBlack = rawReadAveraged(LOW, HIGH);
+
+  redMin = (int)rWhite; greenMin = (int)gWhite; blueMin = (int)bWhite;
+  redMax = (int)rBlack; greenMax = (int)gBlack; blueMax = (int)bBlack;
 
   prefs.putInt("rMin", redMin);
   prefs.putInt("gMin", greenMin);
@@ -148,13 +196,14 @@ void runCalibration() {
   prefs.putInt("gMax", greenMax);
   prefs.putInt("bMax", blueMax);
 
-  Serial.println("Calibration saved!");
+  colorCalValid = calibrationLooksValid();
+  Serial.println("Calibration saved.");
   calibrationPending = false;
 }
 
-// ═══════════════════════════════════════════════════════
+// =========================
 // WebSocket event handler
-// ═══════════════════════════════════════════════════════
+// =========================
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:     Serial.printf("[WS] Client #%u connected\n", num); break;
@@ -175,6 +224,9 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
       else if (strcmp(cmd, "calibrate") == 0) {
         calibrationPending = true;
       }
+      else if (strcmp(cmd, "clearJaundice") == 0) {
+        jaundiceDetected = false;
+      }
       break;
     }
     default: break;
@@ -187,19 +239,12 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 void setup() {
   Serial.begin(115200);
 
-  // ===== ECG SETUP =====
-  pinMode(loMinus, INPUT);
-  pinMode(loPlus, INPUT);
-
-  // ===== TEMP SETUP =====
   dht.begin();
   pinMode(HEATER_RELAY, OUTPUT);
   pinMode(FAN_RELAY, OUTPUT);
-  
   digitalWrite(HEATER_RELAY, HIGH); 
   digitalWrite(FAN_RELAY, HIGH);    
 
-  // ===== JAUNDICE SETUP =====
   pinMode(S0, OUTPUT);
   pinMode(S1, OUTPUT);
   pinMode(S2, OUTPUT);
@@ -213,7 +258,6 @@ void setup() {
   digitalWrite(S1, LOW);
   digitalWrite(BLUE_RELAY, LOW);   
 
-  // Load stored calibration
   prefs.begin("color_cal", false);
   redMin   = prefs.getInt("rMin", 0);
   greenMin = prefs.getInt("gMin", 0);
@@ -221,12 +265,11 @@ void setup() {
   redMax   = prefs.getInt("rMax", 255);
   greenMax = prefs.getInt("gMax", 255);
   blueMax  = prefs.getInt("bMax", 255);
+  colorCalValid = calibrationLooksValid();
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ap_ssid, ap_password);
   delay(100);
-  Serial.print("\nAP IP: "); Serial.println(WiFi.softAPIP());
-
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
 }
@@ -245,50 +288,27 @@ void loop() {
   unsigned long currentMillis = millis();
   unsigned long currentMicros = micros();
 
-  // =========================
-  // ECG LOOP (250Hz)
-  // =========================
+  // ECG
   if (currentMicros - previousMicros >= interval) {
     previousMicros = currentMicros;
-
     if (digitalRead(loPlus) == HIGH || digitalRead(loMinus) == HIGH) {
-      xn1 = xn2 = yn1 = yn2 = 0;
-      prevRawValue = prevHPFValue = 0;
-      lpfValue = 0;
-      
-      if (ecgBufIdx < ECG_BATCH_SIZE) {
-        ecgBuffer[ecgBufIdx++] = 2048; // Centered flatline
-      }
+      xn1 = xn2 = yn1 = yn2 = 0; prevRawValue = prevHPFValue = 0; lpfValue = 0;
+      if (ecgBufIdx < ECG_BATCH_SIZE) ecgBuffer[ecgBufIdx++] = 2048;
       ecgPrev = 0;
     } else {
       rawValue = analogRead(ecgPin);
-
-      // Notch filter (50Hz)
       notchValue = a0 * rawValue + a1 * xn1 + a2 * xn2 - b1 * yn1 - b2 * yn2;
       xn2 = xn1; xn1 = rawValue;
       yn2 = yn1; yn1 = notchValue;
-
-      // Low-pass filter
       lpfValue = lpfValue + alphaLPF * (notchValue - lpfValue);
-
-      // High-pass filter
       hpfValue = alphaHPF * (prevHPFValue + lpfValue - prevRawValue);
-      prevRawValue = lpfValue;
-      prevHPFValue = hpfValue;
-
-      // Adjusted to center on 2048 for the 0-4095 app graph scale
-      int filteredOut = (hpfValue * 2) + 2048; 
-      if (ecgBufIdx < ECG_BATCH_SIZE) {
-        ecgBuffer[ecgBufIdx++] = filteredOut;
-      }
-
-      // Peak detection for BPM based on raw signal
+      prevRawValue = lpfValue; prevHPFValue = hpfValue;
+      int filteredOut = (int)((hpfValue * 2.0f) + 2048.0f);
+      if (ecgBufIdx < ECG_BATCH_SIZE) ecgBuffer[ecgBufIdx++] = constrain(filteredOut, 0, 4095);
       if (rawValue > ECG_THRESH && ecgPrev <= ECG_THRESH) {
         if (lastBeat > 0) {
           unsigned long beatInterval = currentMillis - lastBeat;
-          if (beatInterval > 300 && beatInterval < 2000) {
-            currentBPM = 60000 / beatInterval;
-          }
+          if (beatInterval > 300 && beatInterval < 2000) currentBPM = 60000 / beatInterval;
         }
         lastBeat = currentMillis;
       }
@@ -296,89 +316,55 @@ void loop() {
     }
   }
 
-  // ── Send ECG batch (every 100ms)
   if (currentMillis - lastEcgSend >= ECG_SEND_INTERVAL) {
     lastEcgSend = currentMillis;
-
     if (ecgBufIdx > 0) {
-      StaticJsonDocument<512> ecgDoc;
+      StaticJsonDocument<768> ecgDoc;
       ecgDoc["type"] = "ecg";
       JsonArray ecgArr = ecgDoc.createNestedArray("ecg");
-      for (int i = 0; i < ecgBufIdx; i++) {
-        ecgArr.add(ecgBuffer[i]);
-      }
+      for (int i = 0; i < ecgBufIdx; i++) ecgArr.add(ecgBuffer[i]);
       ecgDoc["bpm"] = currentBPM;
-
-      String ecgOut;
-      serializeJson(ecgDoc, ecgOut);
+      String ecgOut; serializeJson(ecgDoc, ecgOut);
       webSocket.broadcastTXT(ecgOut);
       ecgBufIdx = 0;
     }
   }
 
-  // =========================
-  // TEMP AND HUMIDITY LOOP
-  // =========================
+  // TEMP/HUM
   if (currentMillis - lastTempRead >= tempInterval) {
     lastTempRead = currentMillis;
-
     float temp = dht.readTemperature();
     float hum  = dht.readHumidity();
-
     if (isnan(temp) || isnan(hum)) {
-      cachedSensorError = true;
-      cachedTemp = 0; cachedHum = 0;
-      digitalWrite(HEATER_RELAY, HIGH); // OFF
-      digitalWrite(FAN_RELAY, LOW);     // ON
-      cachedHeaterOn = false;
-      cachedFanOn = true;
+      cachedSensorError = true; cachedTemp = 0; cachedHum = 0;
+      digitalWrite(HEATER_RELAY, HIGH); digitalWrite(FAN_RELAY, LOW);
+      cachedHeaterOn = false; cachedFanOn = true;
     } else {
-      cachedSensorError = false;
-      cachedTemp = temp;
-      cachedHum = hum;
-
-      if (temp < tempMinLimit) {
-        digitalWrite(HEATER_RELAY, LOW);  // ON
-        digitalWrite(FAN_RELAY, LOW);     // ON
-        cachedHeaterOn = true; 
-        cachedFanOn = true;
-      } else if (temp > tempMaxLimit) {
-        digitalWrite(HEATER_RELAY, HIGH); // OFF
-        digitalWrite(FAN_RELAY, LOW);     // ON
-        cachedHeaterOn = false; 
-        cachedFanOn = true;
-      } else {
-        digitalWrite(HEATER_RELAY, HIGH); // OFF
-        digitalWrite(FAN_RELAY, LOW);     // ON (Default to circulating)
-        cachedHeaterOn = false; 
-        cachedFanOn = true;
-      }
+      cachedSensorError = false; cachedTemp = temp; cachedHum = hum;
+      if (temp < tempMinLimit) { digitalWrite(HEATER_RELAY, LOW); digitalWrite(FAN_RELAY, LOW); cachedHeaterOn = true; cachedFanOn = true; }
+      else if (temp > tempMaxLimit) { digitalWrite(HEATER_RELAY, HIGH); digitalWrite(FAN_RELAY, LOW); cachedHeaterOn = false; cachedFanOn = true; }
+      else { digitalWrite(HEATER_RELAY, HIGH); digitalWrite(FAN_RELAY, LOW); cachedHeaterOn = false; cachedFanOn = true; }
     }
   }
 
-  // =========================
-  // JAUNDICE LOOP
-  // =========================
+  // COLOR / JAUNDICE
   if (currentMillis - lastColorRead >= colorInterval) {
     lastColorRead = currentMillis;
+    readRGB();
 
-    cachedR = getMappedColor(LOW,  LOW,  redMin,   redMax);
-    cachedG = getMappedColor(HIGH, HIGH, greenMin, greenMax);
-    cachedB = getMappedColor(LOW,  HIGH, blueMin,  blueMax);
-
+    // Yellow detection rule
     if (cachedR > 180 && cachedG > 150 && cachedB < 120) {
-      if (!jaundiceDetected) {
-        Serial.println("*** JAUNDICE DETECTED ***");
-        jaundiceDetected = true;
-      }
-      digitalWrite(BLUE_RELAY, HIGH);  // ON
-    } else {
-      jaundiceDetected = false;
-      digitalWrite(BLUE_RELAY, LOW);   // OFF
+      if (!jaundiceDetected) Serial.println("*** JAUNDICE DETECTED ***");
+      jaundiceDetected = true;
     }
 
-    // Broadcast full array
-    StaticJsonDocument<400> doc;
+    if (jaundiceDetected) {
+      digitalWrite(BLUE_RELAY, HIGH); // Stay ON once detected
+    } else {
+      digitalWrite(BLUE_RELAY, LOW);  // OFF
+    }
+
+    StaticJsonDocument<512> doc;
     doc["type"]        = "vitals";
     doc["temp"]        = cachedTemp;
     doc["hum"]         = cachedHum;
@@ -387,16 +373,14 @@ void loop() {
     doc["lamp"]        = (bool)digitalRead(BLUE_RELAY);
     doc["heater"]      = cachedHeaterOn;
     doc["fan"]         = cachedFanOn;
-    doc["humidifier"]  = false; // removed in hardware
+    doc["humidifier"]  = false;
     doc["sensorError"] = cachedSensorError;
+    doc["colorCal"]    = colorCalValid;
 
-    if (!jaundiceDetected) {
-      JsonObject rgb = doc.createNestedObject("rgb");
-      rgb["r"] = cachedR; rgb["g"] = cachedG; rgb["b"] = cachedB;
-    }
+    JsonObject rgb = doc.createNestedObject("rgb");
+    rgb["r"] = cachedR; rgb["g"] = cachedG; rgb["b"] = cachedB;
 
-    String output;
-    serializeJson(doc, output);
+    String output; serializeJson(doc, output);
     webSocket.broadcastTXT(output);
   }
 }
